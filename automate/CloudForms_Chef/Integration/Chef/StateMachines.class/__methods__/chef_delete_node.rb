@@ -1,11 +1,6 @@
 =begin
- chef_delete_node.rb
-
- Author: Kevin Morey <kevin@redhat.com>
-
- Description: This method uses knife to delete a Chef node
 -------------------------------------------------------------------------------
-   Copyright 2016 Kevin Morey <kevin@redhat.com>
+   Copyright 2017 Red Hat
 
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
@@ -89,11 +84,9 @@ def get_chef_environment_name(ws_values={})
 end
 
 def get_chef_node_name
-  chef_node_name = (@vm.hostnames.first rescue nil)
   if @task
     chef_node_name = @task.get_option(:vm_target_hostname)
   end
-
   chef_node_name ||= @vm.name
   log(:info, "chef_node_name: #{chef_node_name}")
   return chef_node_name
@@ -103,7 +96,7 @@ begin
   $evm.root.attributes.sort.each { |k, v| log(:info, "Root:<$evm.root> Attribute - #{k}: #{v}")}
 
   @task = $evm.root['miq_provision']
-  @vm = @task.try(:destination) || $evm.root['vm']
+  @vm = $evm.root['vm']
 
   chef_bootstrap_attribute = "CHEF Bootstrapped"
 
@@ -113,21 +106,27 @@ begin
   chef_node_name = get_chef_node_name
 
   if bootstrapped =~ (/(true|t|yes|y|1)$/i)
-    delete_cmd  = "/usr/bin/knife node delete #{chef_node_name} "
-    delete_cmd += "-E #{chef_environment} -y -F json "
+    exists_cmd  = "/usr/bin/knife node show #{chef_node_name}"
+    node_exists = call_chef(exists_cmd, 120)
+    if node_exists.success?  
+      delete_cmd  = "/usr/bin/knife node delete #{chef_node_name} "
+      delete_cmd += "-E #{chef_environment} -y -F json "
 
-    delete_result = call_chef(delete_cmd, 300)
-    if delete_result.success?
-      log(:info, "Successfully deleted Chef node #{chef_node_name}", true)
-      @vm.custom_set(chef_bootstrap_attribute, nil)
-      @vm.tag_unassign("chef_bootstrapped/true") rescue nil
+      delete_result = call_chef(delete_cmd, 300)
+      if delete_result.success?
+        log(:info, "Successfully deleted Chef node #{chef_node_name}", true)
+        @vm.custom_set(chef_bootstrap_attribute, nil)
+        @vm.tag_unassign("chef_bootstrapped/true") rescue nil
+      else
+        log(:error, "Unable to delete Chef node #{chef_node_name}", true)
+        raise "Exiting due to chef delete node failure"
+      end
     else
-      log(:error, "Unable to delete Chef node #{chef_node_name}", true)
-      raise "Exiting due to chef delete node failure"
+      log(:info, "Chef Client doesn't exist: #{chef_node_name}")
+      exit MIQ_OK
     end
   end
 
-  # Ruby rescue
 rescue => err
   log(:error, "[#{err}]\n#{err.backtrace.join("\n")}")
   exit MIQ_STOP

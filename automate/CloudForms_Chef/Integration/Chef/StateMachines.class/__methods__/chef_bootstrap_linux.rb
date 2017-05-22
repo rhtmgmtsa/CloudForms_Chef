@@ -1,11 +1,6 @@
 =begin
- chef_bootstrap_linux.rb
-
- Author: Kevin Morey <kevin@redhat.com>
-
- Description: This method uses knife to bootstrap a Chef client on linux
 -------------------------------------------------------------------------------
-   Copyright 2016 Kevin Morey <kevin@redhat.com>
+   Copyright 2017 Red Hat
 
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
@@ -20,6 +15,7 @@
    limitations under the License.
 -------------------------------------------------------------------------------
 =end
+
 def log(level, msg, update_message = false)
   $evm.log(level, "#{msg}")
   @task.message = msg if @task && (update_message || level == 'error')
@@ -47,12 +43,52 @@ def call_chef(cmd, timeout=20)
   end
 end
 
-# basic retry logic
-def retry_method(retry_time=1.minute)
-  log(:info, "Sleeping for #{retry_time} seconds")
-  $evm.root['ae_result'] = 'retry'
-  $evm.root['ae_retry_interval'] = retry_time
-  exit MIQ_OK
+def get_chef_environment_name(ws_values={})
+  chef_environment = $evm.object['chef_environment']
+  chef_environment ||= $evm.root['dialog_chef_environment']
+  if @task
+    chef_environment = @task.get_tags[:chef_environment] ||
+      ws_values[:chef_environment] ||
+      @task.get_option(:chef_environment)
+  end
+
+  chef_environment ||= "_default"
+  log(:info, "chef_environment: #{chef_environment}")
+  return chef_environment
+end
+
+def get_chef_cookbooks(ws_values={})
+  chef_cookbooks = $evm.object['chef_cookbooks']
+  chef_cookbooks ||= $evm.root['dialog_chef_cookbooks']
+  chef_cookbooks ||= ws_values[:chef_cookbooks]
+  
+  if @task
+    chef_cookbooks = @task.get_tags[:chef_cookbooks] ||
+      ws_values[:chef_cookbooks] ||
+      @task.get_option(:chef_cookbooks)
+  end
+
+  chef_cookbook ||= ""
+  log(:info, "chef_cookbook: #{chef_cookbook}")
+  return chef_cookbooks
+end
+
+def get_chef_node_name
+  chef_node_name = (@vm.hostnames.first rescue nil)
+  if @task
+    chef_node_name = @task.get_option(:vm_target_hostname)
+  end
+
+  chef_node_name ||= @vm.name
+  log(:info, "chef_node_name: #{chef_node_name}")
+  return chef_node_name
+end
+
+def update_vm_custom_attributes(output, chef_node_name)
+  chef_runlist_attribute = "CHEF Run List"
+  run_list = JSON.parse(output)["#{chef_node_name}"]["run_list"]
+  log(:debug, "#{chef_runlist_attribute} #{chef_node_name}: #{run_list}")
+  @vm.custom_set(chef_runlist_attribute, run_list)
 end
 
 # process_tags - Dynamically create categories and tags
@@ -74,29 +110,11 @@ def process_tags( category, category_description, single_value, tag, tag_descrip
   end
 end
 
-def get_chef_environment_name(ws_values={})
-  chef_environment = $evm.object['chef_environment']
-  chef_environment ||= $evm.root['dialog_chef_environment']
-  if @task
-    chef_environment = @task.get_tags[:chef_environment] ||
-      ws_values[:chef_environment] ||
-      @task.get_option(:chef_environment)
-  end
-
-  chef_environment ||= "_default"
-  log(:info, "chef_environment: #{chef_environment}")
-  return chef_environment
-end
-
-def get_chef_node_name
-  chef_node_name = (@vm.hostnames.first rescue nil)
-  if @task
-    chef_node_name = @task.get_option(:vm_target_hostname)    
-  end
-
-  chef_node_name ||= @vm.name
-  log(:info, "chef_node_name: #{chef_node_name}")
-  return chef_node_name
+def retry_method(retry_time=1.minute)
+  log(:info, "Sleeping for #{retry_time} seconds")
+  $evm.root['ae_result'] = 'retry'
+  $evm.root['ae_retry_interval'] = retry_time
+  exit MIQ_OK
 end
 
 def get_chef_version(chef_version=nil)
@@ -108,16 +126,35 @@ end
 
 begin
   $evm.root.attributes.sort.each { |k, v| log(:info, "Root:<$evm.root> Attribute - #{k}: #{v}")}
-
+  $evm.object.attributes.sort.each { |k, v| log(:info, "Object:<$evm.object> Attribute - #{k}: #{v}")}
   @task = $evm.root['miq_provision']
   @vm = @task.try(:destination) || $evm.root['vm']
 
   chef_bootstrap_attribute = "CHEF Bootstrapped"
-
   bootstrapped = $evm.get_state_var(chef_bootstrap_attribute)
 
+  ws_values = (@task.options.fetch(:ws_values, {}) rescue {})
+
+
   chef_environment = get_chef_environment_name
+  chef_node_name = get_chef_node_name
   chef_version = get_chef_version
+
+  default_chef_runlist = $evm.object['default_chef_runlist'].select { |item| /^(role|cookbook|recipe)\:\.*/.match(item) }.map { |item| item.sub(":","[") + "]" }
+  chef_cookbooks = @task.get_option("chef_cookbooks") #get_chef_cookbooks(ws_values)
+
+  log(:info, "Chef Default Runlist #{default_chef_runlist.inspect}")
+  log(:info, "Chef Cookbooks #{chef_cookbooks.inspect}")
+
+  if default_chef_runlist.kind_of?(Array) && chef_cookbooks.kind_of?(Array)
+    chef_runlist = default_chef_runlist.concat(chef_cookbooks).map(&:inspect).join(', ')
+  elsif
+    chef_runlist = default_chef_runlist.map(&:inspect).join(', ')
+  end
+  
+  chef_runlist = chef_runlist
+  
+  log(:info, "Chef runlist: #{chef_runlist}")
 
   chef_ipaddress_attribute = 'Primary IPAddress'
   primary_ipaddress = $evm.get_state_var(chef_ipaddress_attribute)
@@ -133,11 +170,19 @@ begin
   unless bootstrapped =~ (/(true|t|yes|y|1)$/i)
     bootstrap_cmd  = "/usr/bin/knife bootstrap #{primary_ipaddress} -x '#{username}' -P '#{password}' "
     bootstrap_cmd += "-E #{chef_environment} -y -N #{chef_node_name} -F json "
+    if chef_runlist
+      bootstrap_cmd += "--run-list #{chef_runlist} "
+    end
+    if $evm.object['sudo'] = "true"
+      bootstrap_cmd += "--sudo "
+    end
     bootstrap_cmd += "--node-ssl-verify-mode none "
-    
+
     if chef_version
       bootstrap_cmd += "--bootstrap-version #{chef_version} "
     end
+
+    log(:info, "Chef bootstrap command: #{bootstrap_cmd}")
 
     bootstrap_result = call_chef(bootstrap_cmd, 300)
     if bootstrap_result.success?
@@ -152,6 +197,7 @@ begin
       raise "Exiting due to chef bootstrap failure"
     end
   end
+
 
   # Ruby rescue
 rescue => err

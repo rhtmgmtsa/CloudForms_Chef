@@ -9,7 +9,9 @@ object:
     description: 
   fields:
   - username:
-      value: root
+      value: ec2-user
+  - password:
+      value: v2:{4ZjqvJ4Gd7CVREFhVm5h6w==}
   - port:
       value: '22'
   - step2:

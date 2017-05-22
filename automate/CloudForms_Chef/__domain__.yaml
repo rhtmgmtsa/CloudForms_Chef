@@ -6,7 +6,8 @@ object:
     name: CloudForms_Chef
     description: Chef Automate Integrations
     display_name: 
-    system: false
-    priority: 6
+    priority: 2
     enabled: true
-    tenant_id: 12000000000001
+    tenant_id: 20000000000002
+    source: user
+    top_level_namespace: 

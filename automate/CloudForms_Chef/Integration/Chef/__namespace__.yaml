@@ -6,6 +6,5 @@ object:
     name: Chef
     description: 
     display_name: 
-    system: 
     priority: 
     enabled: 

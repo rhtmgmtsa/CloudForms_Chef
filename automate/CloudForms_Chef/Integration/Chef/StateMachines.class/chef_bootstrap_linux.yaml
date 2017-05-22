@@ -9,15 +9,15 @@ object:
     description: 
   fields:
   - username:
-      value: root
+      value: ec2-user
   - password:
-      value: v2:{zNMqHYJ2hQzgrEJuB3KbJg==}
+      value: v2:{4ZjqvJ4Gd7CVREFhVm5h6w==}
   - port:
       value: '22'
   - step2:
       value: METHOD::chef_bootstrap_check
   - step3:
-      value: METHOD::chef_wait_for_ip
+      value: METHOD::chef_wait_for_ssh
   - step4:
       value: METHOD::chef_bootstrap_linux
   - step5:
