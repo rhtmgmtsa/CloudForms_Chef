@@ -38,7 +38,7 @@ object:
       datatype: password
       priority: 2
       owner: 
-      default_value: v2:{4ZjqvJ4Gd7CVREFhVm5h6w==}
+      default_value: 
       substitute: true
       message: create
       visibility: 
